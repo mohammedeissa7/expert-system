@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+*.log
+data/*.csv
+data/*.zip
+ml/models/*.pkl
+ml/models/*.joblib
+.DS_Store
