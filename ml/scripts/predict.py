@@ -1,7 +1,3 @@
-"""
-predict.py — Load trained model, accept JSON from stdin, output prediction JSON to stdout.
-Called by mlBridge.ts via child_process.
-"""
 import sys
 import json
 import joblib

@@ -1,0 +1,20 @@
+{
+  "name": "@survey-expert/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/contracts.js",
+  "types": "dist/contracts.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/contracts.d.ts",
+      "default": "./dist/contracts.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}
