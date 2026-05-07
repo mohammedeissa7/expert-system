@@ -25,7 +25,7 @@ export default function App() {
         </main>
 
         <footer>
-          <p>Data: Stack Overflow Developer Survey 2023 · 90,184 Respondents</p>
+          <p>Data: Stack Overflow Developer Survey 2024 · 90,184 Respondents</p>
           <p style={{ marginTop: '6px', opacity: 0.5 }}>Eissa Was Here</p>
         </footer>
       </div>

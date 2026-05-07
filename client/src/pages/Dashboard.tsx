@@ -109,15 +109,15 @@ export default function Dashboard() {
   return (
     <div className="container">
       <header className="page-header">
-        <h1 className="page-title">Stack Overflow<br />Survey Analytics 2023</h1>
+        <h1 className="page-title">Stack Overflow<br />Survey Analytics 2024</h1>
         <p className="page-subtitle">90,184 Developers · 84 Questions · 314 Technologies</p>
       </header>
 
       <div className="stats-grid">
-        <StatCard label="Total Respondents" value={`${(stats.totalRespondents/1000).toFixed(0)}K`} change="↑ 12% vs 2022" changeDir="up" delay={0} />
+        <StatCard label="Total Respondents" value={`${(stats.totalRespondents/1000).toFixed(0)}K`} change="↑ 12% vs 2023" changeDir="up" delay={0} />
         <StatCard label="Avg Salary (Global)" value={`$${(stats.avgSalaryGlobal/1000).toFixed(0)}K`} change="↑ 10% YoY" changeDir="up" delay={100} />
-        <StatCard label="AI Tool Adoption" value={`${stats.aiToolAdoption}%`} change="↑ 35% vs 2022" changeDir="up" delay={200} />
-        <StatCard label="Online Learners" value={`${stats.onlineLearners}%`} change="↑ 10% vs 2022" changeDir="up" delay={300} />
+        <StatCard label="AI Tool Adoption" value={`${stats.aiToolAdoption}%`} change="↑ 35% vs 2023" changeDir="up" delay={200} />
+        <StatCard label="Online Learners" value={`${stats.onlineLearners}%`} change="↑ 10% vs 2023" changeDir="up" delay={300} />
       </div>
 
       <div className="dashboard-grid">

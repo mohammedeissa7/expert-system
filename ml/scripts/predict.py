@@ -76,7 +76,18 @@ def model_predict(inp: dict, model, explainer, meta: dict, encoders: dict) -> di
     except Exception:
         row['role_encoded'] = 0
 
-    row['country_median_salary'] = 82000  # global median fallback
+    row['country_median_salary'] = 82000  # kept for backward compat
+
+    # Country target encoding (used by new model)
+    country_map = encoders.get('country_map', {})
+    global_mean = country_map.get('__global_mean__', 82000)
+    country = inp.get('country', '')
+    row['country_encoded'] = country_map.get(country, global_mean)
+
+    # Extra features added in v2
+    row['skill_count']  = len(skills)
+    row['wanted_count'] = len(inp.get('wantedSkills', []))
+    row['learn_online'] = 1 if inp.get('learnOnline', False) else 0
 
     for lang in top_langs:
         col = f'skill_{lang.replace("/","_").replace(".","_").lower()}'
@@ -89,14 +100,32 @@ def model_predict(inp: dict, model, explainer, meta: dict, encoders: dict) -> di
     row['skill_count'] = len(skills)
 
     X = np.array([[row.get(c, 0) for c in feature_cols]])
-    predicted = float(model.predict(X)[0])
-    predicted = round(predicted / 1000) * 1000
+    predicted_raw = float(model.predict(X)[0])
 
-    # Confidence via estimator std
-    preds = np.array([est.predict(X)[0] for est in model.estimators_])
-    std = np.std(preds)
-    low = round((predicted - 1.645 * std) / 1000) * 1000
-    high = round((predicted + 1.645 * std) / 1000) * 1000
+    # Inverse log-transform if the model was trained with log1p target
+    import json as _json
+    log_transform = meta.get('log_transform', False)
+    if log_transform:
+        predicted_raw = float(np.expm1(predicted_raw))
+
+    predicted = round(predicted_raw / 1000) * 1000
+
+    # Confidence interval
+    # XGBoost: use ±1.645 * residual std from meta as approximation
+    rmse = meta.get('rmse', predicted * 0.25)
+    low  = round(max(0, predicted - 1.645 * rmse) / 1000) * 1000
+    high = round((predicted + 1.645 * rmse) / 1000) * 1000
+
+    # Fallback: try RF-style tree variance if estimators_ exists
+    try:
+        preds = np.array([est.predict(X)[0] for est in model.estimators_])
+        if log_transform:
+            preds = np.expm1(preds)
+        std  = np.std(preds)
+        low  = round((predicted - 1.645 * std) / 1000) * 1000
+        high = round((predicted + 1.645 * std) / 1000) * 1000
+    except AttributeError:
+        pass  # XGBoost doesn't have estimators_, use rmse-based interval above
 
     # SHAP
     shap_vals = explainer.shap_values(X)[0]
