@@ -2,7 +2,9 @@ import sys
 import json
 import joblib
 import numpy as np
+import torch
 from pathlib import Path
+from model_def import SalaryMLP
 
 MODELS_DIR = Path(__file__).parent.parent / 'models'
 
@@ -48,43 +50,51 @@ def formula_predict(inp: dict) -> dict:
     }
 
 
-def model_predict(inp: dict, model, explainer, meta: dict, encoders: dict) -> dict:
+def _load_mlp(model_path, n_features: int) -> SalaryMLP:
+    """Load SalaryMLP from a .pt checkpoint (CPU-safe)."""
+    checkpoint = torch.load(model_path, map_location='cpu', weights_only=True)
+    net = SalaryMLP(n_features)
+    net.load_state_dict(checkpoint['model_state'])
+    net.eval()
+    return net
+
+
+def model_predict(inp: dict, model, explainer, scaler, meta: dict, encoders: dict) -> dict:
+    import torch
+
     feature_cols = meta['feature_cols']
-    top_langs = meta['top_languages']
-    top_devops = meta['top_devops']
-    ed_map = meta['ed_map']
+    top_langs    = meta['top_languages']
+    top_devops   = meta['top_devops']
+    ed_map       = meta['ed_map']
     role_encoder = encoders['role_encoder']
 
-    skills = [s.lower() for s in inp.get('skills', [])]
+    skills   = [s.lower() for s in inp.get('skills', [])]
     dev_type = inp.get('devType', 'Full-Stack Developer')
 
     row = {}
     row['years_code_pro'] = inp.get('yearsExperience', 0)
 
     edu_label_map = {
-        'bachelors': "Bachelor's degree",
-        'masters': "Master's degree",
-        'phd': 'Doctoral degree',
-        'bootcamp': 'Some college',
+        'bachelors':   "Bachelor's degree",
+        'masters':     "Master's degree",
+        'phd':         'Doctoral degree',
+        'bootcamp':    'Some college',
         'self-taught': 'Something else',
     }
     ed_key = edu_label_map.get(inp.get('education', 'bachelors'), "Bachelor's degree")
     row['ed_encoded'] = ed_map.get(ed_key, 2)
 
     try:
-        row['role_encoded'] = role_encoder.transform([dev_type])[0]
+        row['role_encoded'] = int(role_encoder.transform([dev_type])[0])
     except Exception:
         row['role_encoded'] = 0
 
-    row['country_median_salary'] = 82000  # kept for backward compat
-
-    # Country target encoding (used by new model)
+    # Country target encoding
     country_map = encoders.get('country_map', {})
     global_mean = country_map.get('__global_mean__', 82000)
     country = inp.get('country', '')
     row['country_encoded'] = country_map.get(country, global_mean)
 
-    # Extra features added in v2
     row['skill_count']  = len(skills)
     row['wanted_count'] = len(inp.get('wantedSkills', []))
     row['learn_online'] = 1 if inp.get('learnOnline', False) else 0
@@ -97,39 +107,44 @@ def model_predict(inp: dict, model, explainer, meta: dict, encoders: dict) -> di
         col = f'devops_{tool.lower()}'
         row[col] = 1 if tool.lower() in skills else 0
 
-    row['skill_count'] = len(skills)
+    # Build feature matrix and normalise
+    X_raw = np.array([[row.get(c, 0) for c in feature_cols]], dtype=np.float32)
+    X     = scaler.transform(X_raw).astype(np.float32)
 
-    X = np.array([[row.get(c, 0) for c in feature_cols]])
-    predicted_raw = float(model.predict(X)[0])
+    # Neural network inference
+    with torch.no_grad():
+        X_t          = torch.tensor(X)
+        predicted_log = float(model(X_t).item())
 
-    # Inverse log-transform if the model was trained with log1p target
-    import json as _json
-    log_transform = meta.get('log_transform', False)
-    if log_transform:
-        predicted_raw = float(np.expm1(predicted_raw))
+    # Inverse log-transform
+    if meta.get('log_transform', True):
+        predicted_raw = float(np.expm1(predicted_log))
+    else:
+        predicted_raw = predicted_log
 
     predicted = round(predicted_raw / 1000) * 1000
 
-    # Confidence interval
-    # XGBoost: use ±1.645 * residual std from meta as approximation
+    # Confidence interval — ±1.645σ using training RMSE as σ approximation
     rmse = meta.get('rmse', predicted * 0.25)
     low  = round(max(0, predicted - 1.645 * rmse) / 1000) * 1000
     high = round((predicted + 1.645 * rmse) / 1000) * 1000
 
-    # Fallback: try RF-style tree variance if estimators_ exists
+    # SHAP (GradientExplainer returns a list; index [0] → sample, [0] → classes)
     try:
-        preds = np.array([est.predict(X)[0] for est in model.estimators_])
-        if log_transform:
-            preds = np.expm1(preds)
-        std  = np.std(preds)
-        low  = round((predicted - 1.645 * std) / 1000) * 1000
-        high = round((predicted + 1.645 * std) / 1000) * 1000
-    except AttributeError:
-        pass  # XGBoost doesn't have estimators_, use rmse-based interval above
-
-    # SHAP
-    shap_vals = explainer.shap_values(X)[0]
-    shap_dict = {col: round(float(v)) for col, v in zip(feature_cols, shap_vals)}
+        shap_vals_raw = explainer.shap_values(torch.tensor(X))
+        # GradientExplainer may return list or ndarray
+        if isinstance(shap_vals_raw, list):
+            shap_arr = np.array(shap_vals_raw[0]).flatten()
+        else:
+            shap_arr = np.array(shap_vals_raw).flatten()
+        # Convert log-scale SHAP to dollar-scale (approximate)
+        baseline_salary = predicted_raw
+        shap_dict = {
+            col: round(float(v) * baseline_salary)
+            for col, v in zip(feature_cols, shap_arr)
+        }
+    except Exception:
+        shap_dict = {}
 
     # Missing high-value skills
     high_value = ['Rust', 'Go', 'Kubernetes', 'TypeScript', 'AWS', 'Terraform']
@@ -137,12 +152,12 @@ def model_predict(inp: dict, model, explainer, meta: dict, encoders: dict) -> di
 
     return {
         'predictedSalary': int(predicted),
-        'confidenceLow': int(low),
-        'confidenceHigh': int(high),
+        'confidenceLow':   int(low),
+        'confidenceHigh':  int(high),
         'comparableRoles': [
             {'role': 'Senior Backend Dev', 'medianSalary': int(predicted * 1.05), 'count': 0},
-            {'role': 'DevOps Engineer', 'medianSalary': int(predicted * 1.10), 'count': 0},
-            {'role': 'Cloud Architect', 'medianSalary': int(predicted * 1.22), 'count': 0},
+            {'role': 'DevOps Engineer',    'medianSalary': int(predicted * 1.10), 'count': 0},
+            {'role': 'Cloud Architect',    'medianSalary': int(predicted * 1.22), 'count': 0},
         ],
         'missingHighValueSkills': missing,
         'shapExplanation': shap_dict,
@@ -153,21 +168,25 @@ def model_predict(inp: dict, model, explainer, meta: dict, encoders: dict) -> di
 def main():
     inp = json.loads(sys.stdin.read())
 
-    model_path = MODELS_DIR / 'salary_model.pkl'
+    model_path    = MODELS_DIR / 'salary_model.pt'
+    scaler_path   = MODELS_DIR / 'scaler.pkl'
     explainer_path = MODELS_DIR / 'shap_explainer.pkl'
-    meta_path = MODELS_DIR / 'meta.json'
+    meta_path     = MODELS_DIR / 'meta.json'
     encoders_path = MODELS_DIR / 'encoders.pkl'
 
     if not model_path.exists():
         result = formula_predict(inp)
     else:
-        import json as _json
-        model = joblib.load(model_path)
-        explainer = joblib.load(explainer_path)
-        encoders = joblib.load(encoders_path)
         with open(meta_path) as f:
-            meta = _json.load(f)
-        result = model_predict(inp, model, explainer, meta, encoders)
+            meta = json.load(f)
+
+        n_features = meta.get('n_features', len(meta['feature_cols']))
+        model      = _load_mlp(model_path, n_features)
+        scaler     = joblib.load(scaler_path)
+        explainer  = joblib.load(explainer_path)
+        encoders   = joblib.load(encoders_path)
+
+        result = model_predict(inp, model, explainer, scaler, meta, encoders)
 
     print(json.dumps(result))
 

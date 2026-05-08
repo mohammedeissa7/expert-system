@@ -45,7 +45,7 @@ BATCH_SIZE = 500          # rows per INSERT batch
 COMP_MIN   = 1_000        # drop implausibly low salaries
 COMP_MAX   = 5_000_000    # drop implausibly high salaries
 
-# Stack Overflow 2023 CSV column names  →  DB column names
+# Stack Overflow CSV column names  →  DB column names
 COL_MAP = {
     'ResponseId':              'respondent_id',
     'Country':                 'country',
@@ -194,8 +194,6 @@ def main():
     # Validate CSV exists
     if not CSV_PATH.exists():
         print(f"❌ CSV not found at: {CSV_PATH}")
-        print(f"   Download the Stack Overflow 2023 Developer Survey from:")
-        print(f"   https://survey.stackoverflow.co/2023/")
         print(f"   and place it at:  {CSV_PATH}")
         sys.exit(1)
 
